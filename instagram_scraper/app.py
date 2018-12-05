@@ -82,8 +82,8 @@ class InstagramScraper(object):
         default_attr = dict(username='', usernames=[], filename=None,
                             login_user=None, login_pass=None,
                             destination='./', retain_username=False, interactive=False,
-                            quiet=False, maximum=0, media_metadata=False, latest=False,
-                            latest_stamps=False,
+                            quiet=False, maximum=0, media_metadata=True, latest=False,
+                            latest_stamps=False, download_media=False,
                             media_types=['image', 'video', 'story-image', 'story-video'],
                             tag=False, location=False, search_location=False, comments=False,
                             verbose=0, include_location=False, filter=None,
@@ -848,111 +848,112 @@ class InstagramScraper(object):
 
     def download(self, item, save_dir='./'):
         """Downloads the media file."""
-        for full_url, base_name in self.templatefilename(item):
-            url = full_url.split('?')[0] #try the static url first, stripping parameters
+        if self.media_metadata:
+            for full_url, base_name in self.templatefilename(item):
+                url = full_url.split('?')[0] #try the static url first, stripping parameters
 
-            file_path = os.path.join(save_dir, base_name)
+                file_path = os.path.join(save_dir, base_name)
 
-            if not os.path.exists(os.path.dirname(file_path)):
-                self.make_dir(os.path.dirname(file_path))
+                if not os.path.exists(os.path.dirname(file_path)):
+                    self.make_dir(os.path.dirname(file_path))
 
-            if not os.path.isfile(file_path):
-                headers = {'Host': urlparse(url).hostname}
+                if not os.path.isfile(file_path):
+                    headers = {'Host': urlparse(url).hostname}
 
-                part_file = file_path + '.part'
-                downloaded = 0
-                total_length = None
-                with open(part_file, 'wb') as media_file:
-                    try:
-                        retry = 0
-                        retry_delay = RETRY_DELAY
-                        while(True):
-                            if self.quit:
-                                return
-                            try:
-                                downloaded_before = downloaded
-                                headers['Range'] = 'bytes={0}-'.format(downloaded_before)
+                    part_file = file_path + '.part'
+                    downloaded = 0
+                    total_length = None
+                    with open(part_file, 'wb') as media_file:
+                        try:
+                            retry = 0
+                            retry_delay = RETRY_DELAY
+                            while(True):
+                                if self.quit:
+                                    return
+                                try:
+                                    downloaded_before = downloaded
+                                    headers['Range'] = 'bytes={0}-'.format(downloaded_before)
 
-                                with self.session.get(url, cookies=self.cookies, headers=headers, stream=True, timeout=CONNECT_TIMEOUT) as response:
-                                    if response.status_code == 404:
-                                        #instagram don't lie on this
-                                        break
-                                    if response.status_code == 403 and url != full_url:
-                                        #see issue #254
-                                        url = full_url
-                                        continue
-                                    response.raise_for_status()
+                                    with self.session.get(url, cookies=self.cookies, headers=headers, stream=True, timeout=CONNECT_TIMEOUT) as response:
+                                        if response.status_code == 404:
+                                            #instagram don't lie on this
+                                            break
+                                        if response.status_code == 403 and url != full_url:
+                                            #see issue #254
+                                            url = full_url
+                                            continue
+                                        response.raise_for_status()
 
-                                    if response.status_code == 206:
-                                        try:
-                                            match = re.match(r'bytes (?P<first>\d+)-(?P<last>\d+)/(?P<size>\d+)', response.headers['Content-Range'])
-                                            range_file_position = int(match.group('first'))
-                                            if range_file_position != downloaded_before: 
-                                                raise Exception()
-                                            total_length = int(match.group('size'))
-                                            media_file.truncate(total_length)
-                                        except:
-                                            raise requests.exceptions.InvalidHeader('Invalid range response "{0}" for requested "{1}"'.format(
-                                                response.headers.get('Content-Range'), headers.get('Range')))
-                                    elif response.status_code == 200:
-                                        if downloaded_before != 0:
-                                            downloaded_before = 0
-                                            downloaded = 0
-                                            media_file.seek(0)
-                                        content_length = response.headers.get('Content-Length')
-                                        if content_length is None:
-                                            self.logger.warning('No Content-Length in response, the file {0} may be partially downloaded'.format(base_name))
+                                        if response.status_code == 206:
+                                            try:
+                                                match = re.match(r'bytes (?P<first>\d+)-(?P<last>\d+)/(?P<size>\d+)', response.headers['Content-Range'])
+                                                range_file_position = int(match.group('first'))
+                                                if range_file_position != downloaded_before: 
+                                                    raise Exception()
+                                                total_length = int(match.group('size'))
+                                                media_file.truncate(total_length)
+                                            except:
+                                                raise requests.exceptions.InvalidHeader('Invalid range response "{0}" for requested "{1}"'.format(
+                                                    response.headers.get('Content-Range'), headers.get('Range')))
+                                        elif response.status_code == 200:
+                                            if downloaded_before != 0:
+                                                downloaded_before = 0
+                                                downloaded = 0
+                                                media_file.seek(0)
+                                            content_length = response.headers.get('Content-Length')
+                                            if content_length is None:
+                                                self.logger.warning('No Content-Length in response, the file {0} may be partially downloaded'.format(base_name))
+                                            else:
+                                                total_length = int(content_length)
+                                                media_file.truncate(total_length)
                                         else:
-                                            total_length = int(content_length)
-                                            media_file.truncate(total_length)
-                                    else:
-                                        raise PartialContentException('Wrong status code {0}', response.status_code)
+                                            raise PartialContentException('Wrong status code {0}', response.status_code)
 
-                                    for chunk in response.iter_content(chunk_size=64*1024):
-                                        if chunk:
-                                            downloaded += len(chunk)
-                                            media_file.write(chunk)
-                                        if self.quit:
-                                            return
+                                        for chunk in response.iter_content(chunk_size=64*1024):
+                                            if chunk:
+                                                downloaded += len(chunk)
+                                                media_file.write(chunk)
+                                            if self.quit:
+                                                return
 
-                                if downloaded != total_length and total_length is not None:
-                                    raise PartialContentException('Got first {0} bytes from {1}'.format(downloaded, total_length))
+                                    if downloaded != total_length and total_length is not None:
+                                        raise PartialContentException('Got first {0} bytes from {1}'.format(downloaded, total_length))
 
-                                break
+                                    break
 
-                            # In case of exception part_file is not removed on purpose,
-                            # it is easier to exemine it later when analising logs.
-                            # Please do not add os.remove here.
-                            except (KeyboardInterrupt):
-                                raise
-                            except (requests.exceptions.RequestException, PartialContentException) as e:
-                                if downloaded - downloaded_before > 0:
-                                    # if we got some data on this iteration do not count it as a failure
-                                    self.logger.warning('Continue after exception {0} on {1}'.format(repr(e), url))
-                                    retry = 0 # the next fail will be first in a row with no data
-                                    continue
-                                if retry < MAX_RETRIES:
-                                    self.logger.warning('Retry after exception {0} on {1}'.format(repr(e), url))
-                                    self.sleep(retry_delay)
-                                    retry_delay = min( 2 * retry_delay, MAX_RETRY_DELAY )
-                                    retry = retry + 1
-                                    continue
-                                else:
-                                    keep_trying = self._retry_prompt(url, repr(e))
-                                    if keep_trying == True:
-                                        retry = 0
+                                # In case of exception part_file is not removed on purpose,
+                                # it is easier to exemine it later when analising logs.
+                                # Please do not add os.remove here.
+                                except (KeyboardInterrupt):
+                                    raise
+                                except (requests.exceptions.RequestException, PartialContentException) as e:
+                                    if downloaded - downloaded_before > 0:
+                                        # if we got some data on this iteration do not count it as a failure
+                                        self.logger.warning('Continue after exception {0} on {1}'.format(repr(e), url))
+                                        retry = 0 # the next fail will be first in a row with no data
                                         continue
-                                    elif keep_trying == False:
-                                        break
-                                raise
-                    finally:
-                        media_file.truncate(downloaded)
+                                    if retry < MAX_RETRIES:
+                                        self.logger.warning('Retry after exception {0} on {1}'.format(repr(e), url))
+                                        self.sleep(retry_delay)
+                                        retry_delay = min( 2 * retry_delay, MAX_RETRY_DELAY )
+                                        retry = retry + 1
+                                        continue
+                                    else:
+                                        keep_trying = self._retry_prompt(url, repr(e))
+                                        if keep_trying == True:
+                                            retry = 0
+                                            continue
+                                        elif keep_trying == False:
+                                            break
+                                    raise
+                        finally:
+                            media_file.truncate(downloaded)
 
-                if downloaded == total_length or total_length is None:
-                    os.rename(part_file, file_path)
-                    timestamp = self.__get_timestamp(item)
-                    file_time = int(timestamp if timestamp else time.time())
-                    os.utime(file_path, (file_time, file_time))
+                    if downloaded == total_length or total_length is None:
+                        os.rename(part_file, file_path)
+                        timestamp = self.__get_timestamp(item)
+                        file_time = int(timestamp if timestamp else time.time())
+                        os.utime(file_path, (file_time, file_time))
 
     def templatefilename(self, item):
 
@@ -1109,121 +1110,48 @@ class InstagramScraper(object):
 
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="instagram-scraper scrapes and downloads an instagram user's photos and videos.",
-        epilog=textwrap.dedent("""
-        You can hide your credentials from the history, by reading your
-        username from a local file:
+def main(**kwargs):
 
-        $ instagram-scraper @insta_args.txt user_to_scrape
-
-        with insta_args.txt looking like this:
-        -u=my_username
-        -p=my_password
-
-        You can add all arguments you want to that file, just remember to have
-        one argument per line.
-
-        Customize filename:
-        by adding option --template or -T
-        Default is: {urlname}
-        And there are some option:
-        {username}: Instagram user(s) to scrape.
-        {shortcode}: post shortcode, but profile_pic and story are none.
-        {urlname}: filename form url.
-        {mediatype}: type of media.
-        {datetime}: date and time that photo/video post on,
-                     format is: 20180101 01h01m01s
-        {date}: date that photo/video post on,
-                 format is: 20180101
-        {year}: format is: 2018
-        {month}: format is: 01-12
-        {day}: format is: 01-31
-        {h}: hour, format is: 00-23h
-        {m}: minute, format is 00-59m
-        {s}: second, format is 00-59s
-
-        """),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        fromfile_prefix_chars='@')
-
-    parser.add_argument('username', help='Instagram user(s) to scrape', nargs='*')
-    parser.add_argument('--destination', '-d', default='./', help='Download destination')
-    parser.add_argument('--login-user', '--login_user', '-u', default=None, help='Instagram login user', required=True)
-    parser.add_argument('--login-pass', '--login_pass', '-p', default=None, help='Instagram login password', required=True)
-    parser.add_argument('--filename', '-f', help='Path to a file containing a list of users to scrape')
-    parser.add_argument('--quiet', '-q', default=False, action='store_true', help='Be quiet while scraping')
-    parser.add_argument('--maximum', '-m', type=int, default=0, help='Maximum number of items to scrape')
-    parser.add_argument('--retain-username', '--retain_username', '-n', action='store_true', default=False,
-                        help='Creates username subdirectory when destination flag is set')
-    parser.add_argument('--media-metadata', '--media_metadata', action='store_true', default=False,
-                        help='Save media metadata to json file')
-    parser.add_argument('--include-location', '--include_location', action='store_true', default=False,
-                        help='Include location data when saving media metadata')
-    parser.add_argument('--media-types', '--media_types', '-t', nargs='+', default=['image', 'video', 'story'],
-                        help='Specify media types to scrape')
-    parser.add_argument('--latest', action='store_true', default=False, help='Scrape new media since the last scrape')
-    parser.add_argument('--latest-stamps', '--latest_stamps', default=None,
-                        help='Scrape new media since timestamps by user in specified file')
-    parser.add_argument('--tag', action='store_true', default=False, help='Scrape media using a hashtag')
-    parser.add_argument('--filter', default=None, help='Filter by tags in user posts', nargs='*')
-    parser.add_argument('--location', action='store_true', default=False, help='Scrape media using a location-id')
-    parser.add_argument('--search-location', action='store_true', default=False, help='Search for locations by name')
-    parser.add_argument('--comments', action='store_true', default=False, help='Save post comments to json file')
-    parser.add_argument('--interactive', '-i', action='store_true', default=False,
-                        help='Enable interactive login challenge solving')
-    parser.add_argument('--retry-forever', action='store_true', default=False,
-                        help='Retry download attempts endlessly when errors are received')
-    parser.add_argument('--verbose', '-v', type=int, default=0, help='Logging verbosity level')
-    parser.add_argument('--template', '-T', type=str, default='{urlname}', help='Customize filename template')
-
-    args = parser.parse_args()
-
-    if (args.login_user and args.login_pass is None) or (args.login_user is None and args.login_pass):
-        parser.print_help()
+    if (kwargs.get('login_user') and kwargs.get('login_pass') is None) or (kwargs.get('login_user') is None and kwargs.get('login_pass')):
         raise ValueError('Must provide login user AND password')
 
-    if not args.username and args.filename is None:
-        parser.print_help()
+    if not kwargs.get('username') and kwargs.get('filename'):
         raise ValueError('Must provide username(s) OR a file containing a list of username(s)')
-    elif args.username and args.filename:
-        parser.print_help()
+
+    elif kwargs.get('username') and kwargs.get('filename'): 
         raise ValueError('Must provide only one of the following: username(s) OR a filename containing username(s)')
 
-    if args.tag and args.location:
-        parser.print_help()
+    if kwargs.get('tag') and kwargs.get('location'):      
         raise ValueError('Must provide only one of the following: hashtag OR location')
 
-    if args.tag and args.filter:
-        parser.print_help()
+    if kwargs.get('tag') and kwargs.get('filter'):
         raise ValueError('Filters apply to user posts')
 
-    if args.filename:
-        args.usernames = InstagramScraper.parse_file_usernames(args.filename)
+    if kwargs.get('filename'):
+        kwargs['usernames'] = InstagramScraper.parse_file_usernames(kwargs['filename'])
     else:
-        args.usernames = InstagramScraper.parse_delimited_str(','.join(args.username))
+        kwargs['usernames'] = InstagramScraper.parse_delimited_str(kwargs['username'])
 
-    if args.media_types and len(args.media_types) == 1 and re.compile(r'[,;\s]+').findall(args.media_types[0]):
-        args.media_types = InstagramScraper.parse_delimited_str(args.media_types[0])
+    if kwargs.get('media_types') and len(kwargs.get('media_types')) == 1 and re.compile(r'.get(,;\s)+').findall(kwargs.get('media_types').get(0)):
+        kwargs.get['media_types'] = InstagramScraper.parse_delimited_str(kwargs.get('media_types').get(0))
 
-    if args.retry_forever:
+    if kwargs.get('retry_forever'):
         global MAX_RETRIES
         MAX_RETRIES = sys.maxsize
 
-    scraper = InstagramScraper(**vars(args))
+    #print(kwargs,"\n\n\n")
+    scraper = InstagramScraper(**kwargs)
 
     scraper.login()
 
-    if args.tag:
+    if kwargs.get('tag'):
         scraper.scrape_hashtag()
-    elif args.location:
+    elif kwargs.get('location'):
         scraper.scrape_location()
-    elif args.search_location:
+    elif kwargs.get('search_location'):
         scraper.search_locations()
     else:
         scraper.scrape()
-
 
 if __name__ == '__main__':
     main()
